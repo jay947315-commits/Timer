@@ -115,7 +115,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = "z. B. Kaffeemaschine ausschalten"
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             setPadding(dp(10), dp(8), dp(10), dp(8))
             backgroundTintList = android.content.res.ColorStateList.valueOf(Color.rgb(210, 218, 230))
         }
@@ -166,7 +166,7 @@ class MainActivity : Activity() {
         addressInput = EditText(this).apply {
             hint = "Straße, Hausnummer, Ort"
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             setPadding(dp(10), dp(8), dp(10), dp(8))
         }
         locationCard.addView(addressInput, LinearLayout.LayoutParams(-1, dp(50)))
