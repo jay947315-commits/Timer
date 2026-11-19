@@ -50,7 +50,7 @@ class MainActivity : Activity() {
         createChannel()
         selectedLat = prefs.getString("home_lat", "0")?.toDoubleOrNull() ?: 0.0
         selectedLng = prefs.getString("home_lng", "0")?.toDoubleOrNull() ?: 0.0
-        selectedRadius = prefs.getInt("radius", 150).coerceIn(100, 1000)
+        selectedRadius = prefs.getInt("radius", 150).coerceIn(5, 1000)
         render()
         askNotificationPermission()
     }
@@ -181,14 +181,15 @@ class MainActivity : Activity() {
         locationCard.addView(coordRow)
         locationCard.addView(button("Koordinaten übernehmen") { saveCoordinatesFromFields() })
 
-        locationCard.addView(button("Meinen aktuellen GPS-Standort verwenden", true) { useCurrentLocation() }.apply { setPadding(dp(4), dp(5), dp(4), dp(5)) })
+        locationCard.addView(button("Hausumriss auf Karte einzeichnen", true) { openHouseDrawing() }.apply { setPadding(dp(4), dp(5), dp(4), dp(5)) })
+        locationCard.addView(button("Meinen aktuellen GPS-Standort verwenden") { useCurrentLocation() }.apply { setPadding(dp(4), dp(5), dp(4), dp(5)) })
         locationCard.addView(text("Erinnerungsradius: ${selectedRadius} m", 14f, ink, true).apply { setPadding(0, dp(18), 0, 0) }.also { radiusLabel = it })
         radiusBar = SeekBar(this).apply {
-            max = 900
-            progress = selectedRadius - 100
+            max = 995
+            progress = selectedRadius - 5
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    selectedRadius = progress + 100
+                    selectedRadius = progress + 5
                     radiusLabel.text = "Erinnerungsradius: ${selectedRadius} m"
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) {}
@@ -199,7 +200,7 @@ class MainActivity : Activity() {
             })
         }
         locationCard.addView(radiusBar)
-        locationCard.addView(text("100 m", 11f, muted).apply { setPadding(0, 0, 0, dp(8)) })
+        locationCard.addView(text("5 m", 11f, muted).apply { setPadding(0, 0, 0, dp(8)) })
         locationCard.addView(button("Standort-Erinnerung aktivieren / aktualisieren", true) { activateLocationReminder() })
         locationCard.addView(button("Standort-Erinnerung ausschalten") {
             LocationServices.getGeofencingClient(this).removeGeofences(geofencePendingIntent())
@@ -210,6 +211,58 @@ class MainActivity : Activity() {
 
         root.addView(text("Tipp: Für zuverlässige Erinnerungen müssen Standortzugriff im Hintergrund und Benachrichtigungen erlaubt sein.", 12f, muted).apply { setPadding(dp(3), dp(2), dp(3), 0) })
         setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
+    }
+
+
+    private fun openHouseDrawing() {
+        if (!hasSavedLocation()) {
+            Toast.makeText(this, "Bitte zuerst deinen Zuhause-Standort festlegen.", Toast.LENGTH_LONG).show()
+            return
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(this, MapDrawActivity::class.java)
+            .putExtra("lat", selectedLat).putExtra("lng", selectedLng), 77)
+    }
+
+    @Deprecated("Legacy result callback")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 77 || resultCode != RESULT_OK) return
+        val json = data?.getStringExtra("polygon") ?: return
+        try {
+            val regex = Regex("\\{\"lat\":(-?[0-9.]+),\"lng\":(-?[0-9.]+)\\}")
+            val points = regex.findAll(json).map { it.groupValues[1].toDouble() to it.groupValues[2].toDouble() }.toList()
+            if (points.size < 3) throw IllegalArgumentException("Zu wenige Eckpunkte")
+            val centerLat = points.map { it.first }.average()
+            val centerLng = points.map { it.second }.average()
+            fun xy(p: Pair<Double, Double>): Pair<Double, Double> {
+                val y = (p.first - centerLat) * 111320.0
+                val x = (p.second - centerLng) * 111320.0 * kotlin.math.cos(Math.toRadians(centerLat))
+                return x to y
+            }
+            val local = points.map(::xy)
+            var minEdgeDistance = Double.MAX_VALUE
+            for (i in local.indices) {
+                val a = local[i]
+                val b = local[(i + 1) % local.size]
+                val dx = b.first - a.first
+                val dy = b.second - a.second
+                val denom = dx * dx + dy * dy
+                val t = if (denom == 0.0) 0.0 else ((-a.first * dx - a.second * dy) / denom).coerceIn(0.0, 1.0)
+                val px = a.first + t * dx
+                val py = a.second + t * dy
+                minEdgeDistance = minOf(minEdgeDistance, kotlin.math.sqrt(px * px + py * py))
+            }
+            selectedLat = centerLat
+            selectedLng = centerLng
+            selectedRadius = minEdgeDistance.toInt().coerceIn(5, 1000)
+            prefs.edit().putString("home_lat", centerLat.toString()).putString("home_lng", centerLng.toString())
+                .putString("house_polygon", json).putInt("radius", selectedRadius).putString("home_label", "Eingezeichneter Hausbereich").apply()
+            render()
+            Toast.makeText(this, "Hausumriss gespeichert. Der Alarmradius ist eine vorsichtige Kreis-Näherung innerhalb des Umrisses.", Toast.LENGTH_LONG).show()
+        } catch (_: Exception) {
+            Toast.makeText(this, "Der Hausumriss konnte nicht übernommen werden.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun hasSavedLocation() = selectedLat != 0.0 || selectedLng != 0.0
